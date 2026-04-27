@@ -125,18 +125,19 @@ async function aiMatch(resumeText, jdText, apiKey) {
     
     let textResult = responseText;
     
-    // Clean up if the model wrapped it in markdown
-    if (textResult.startsWith('```json')) {
-      textResult = textResult.replace(/^```json\n/, '').replace(/\n```$/, '');
-    } else if (textResult.startsWith('```')) {
-      textResult = textResult.replace(/^```\n/, '').replace(/\n```$/, '');
+    // Robust JSON extraction
+    const jsonMatch = textResult.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      textResult = jsonMatch[0];
     }
     
     const parsed = JSON.parse(textResult);
     return parsed;
   } catch (error) {
     console.error("AI matching failed, falling back to keyword matching:", error);
-    return fallbackMatch(resumeText, jdText);
+    const fallbackResult = fallbackMatch(resumeText, jdText);
+    fallbackResult.suggestions.unshift(`[DEBUG] AI Failed: ${error.message || error}`);
+    return fallbackResult;
   }
 }
 
