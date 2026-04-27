@@ -1,61 +1,72 @@
 const https = require('https');
 
-// Fallback keyword-based matching
-function fallbackMatch(resumeText, jdText) {
-  // Normalize text
-  const cleanResume = resumeText.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
-  const cleanJD = jdText.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+// Smart Fallback keyword-based matching
+function fallbackMatch(resumeText, jdText, aiError = null) {
+  const cleanResume = resumeText.toLowerCase();
+  const cleanJD = jdText.toLowerCase();
 
-  // Very basic list of stop words to ignore
-  const stopWords = new Set(['the', 'and', 'is', 'in', 'to', 'of', 'for', 'a', 'with', 'on', 'as', 'are', 'this', 'that', 'by', 'an', 'be', 'or', 'from', 'at']);
-  
-  // Extract potential keywords from JD
-  const jdWords = cleanJD.split(/\s+/).filter(word => word.length > 2 && !stopWords.has(word));
-  
-  // Count frequencies to identify important keywords (basic heuristic)
-  const wordFreq = {};
-  jdWords.forEach(w => {
-    wordFreq[w] = (wordFreq[w] || 0) + 1;
-  });
+  // A comprehensive dictionary of common tech and professional skills
+  const skillDictionary = [
+    'javascript', 'python', 'java', 'c++', 'c#', 'ruby', 'php', 'swift', 'kotlin', 'go', 'rust', 'typescript',
+    'react', 'angular', 'vue', 'node.js', 'node', 'express', 'django', 'flask', 'spring', 'asp.net',
+    'sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'cassandra', 'oracle', 'nosql',
+    'aws', 'azure', 'gcp', 'google cloud', 'docker', 'kubernetes', 'terraform', 'ansible', 'jenkins', 'ci/cd',
+    'git', 'github', 'gitlab', 'bitbucket', 'linux', 'unix', 'bash', 'shell', 'powershell',
+    'html', 'css', 'sass', 'less', 'tailwind', 'bootstrap', 'material ui',
+    'rest', 'graphql', 'soap', 'api', 'microservices', 'serverless',
+    'machine learning', 'ai', 'data science', 'pandas', 'numpy', 'tensorflow', 'pytorch', 'scikit-learn',
+    'agile', 'scrum', 'kanban', 'jira', 'confluence', 'trello',
+    'communication', 'leadership', 'teamwork', 'problem solving', 'critical thinking', 'management'
+  ];
 
-  // Sort words by frequency, assume top ones are important keywords/skills
-  const potentialKeywords = Object.entries(wordFreq)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20) // take top 20 frequent significant words
-    .map(entry => entry[0]);
-
-  const resumeWords = new Set(cleanResume.split(/\s+/));
-  
   const matchingSkills = [];
   const missingSkills = [];
 
-  potentialKeywords.forEach(keyword => {
-    if (resumeWords.has(keyword)) {
-      matchingSkills.push(keyword);
+  // Find which skills from the dictionary are mentioned in the JD
+  const jdSkills = skillDictionary.filter(skill => {
+    // Use word boundaries for exact match, except for special characters like node.js
+    const regex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return regex.test(cleanJD);
+  });
+
+  // If the JD doesn't mention any specific skills from our dictionary, fallback to frequent long words
+  if (jdSkills.length === 0) {
+    const words = cleanJD.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 4);
+    const wordFreq = {};
+    words.forEach(w => wordFreq[w] = (wordFreq[w] || 0) + 1);
+    const topWords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]).slice(0, 10).map(e => e[0]);
+    jdSkills.push(...topWords);
+  }
+
+  // Check if those JD skills are in the resume
+  jdSkills.forEach(skill => {
+    const regex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (regex.test(cleanResume)) {
+      matchingSkills.push(skill);
     } else {
-      missingSkills.push(keyword);
+      missingSkills.push(skill);
     }
   });
 
-  const totalKeywords = potentialKeywords.length;
-  let matchScore = 0;
-  if (totalKeywords > 0) {
-    matchScore = Math.round((matchingSkills.length / totalKeywords) * 100);
-  }
+  const totalKeywords = jdSkills.length;
+  let matchScore = totalKeywords > 0 ? Math.round((matchingSkills.length / totalKeywords) * 100) : 0;
 
-  // Generate basic suggestions based on missing skills
-  const suggestions = missingSkills.slice(0, 3).map(skill => `Consider adding experience or projects related to '${skill}'`);
+  const suggestions = missingSkills.slice(0, 3).map(skill => `Consider highlighting experience with '${skill}'`);
   if (matchScore < 80) {
-    suggestions.unshift("To reach 80+, consider adding more keywords from the job description.");
+    suggestions.unshift("Try to incorporate more of the specific tools mentioned in the job description.");
+  }
+  
+  if (aiError) {
+    suggestions.push(`[System Note] Score generated via Smart Fallback due to AI quota limits (${aiError})`);
   }
 
   return {
     matchScore,
-    matchingSkills,
-    missingSkills,
-    strengths: matchingSkills.length > 0 ? [`Your resume matches ${matchingSkills.length} key terms from the JD`] : ["No clear strengths found"],
-    weaknesses: missingSkills.length > 0 ? [`Missing ${missingSkills.length} key terms from the JD`] : ["No major weaknesses"],
-    suggestions: suggestions.length > 0 ? suggestions : ["Your resume looks great!"]
+    matchingSkills: matchingSkills.slice(0, 10),
+    missingSkills: missingSkills.slice(0, 10),
+    strengths: matchingSkills.length > 0 ? [`Successfully matched ${matchingSkills.length} key requirements from the job description.`, `Shows proficiency in core technologies like ${matchingSkills[0]}.`] : ["Your resume is well formatted."],
+    weaknesses: missingSkills.length > 0 ? [`Missing ${missingSkills.length} key technical requirements.`, `Lacks visible experience with ${missingSkills[0]}.`] : ["No major technical weaknesses found."],
+    suggestions: suggestions.slice(0, 3)
   };
 }
 
@@ -134,15 +145,8 @@ async function aiMatch(resumeText, jdText, apiKey) {
     const parsed = JSON.parse(textResult);
     return parsed;
   } catch (error) {
-    console.error("AI matching failed:", error);
-    return {
-      matchScore: 0,
-      matchingSkills: [],
-      missingSkills: [`[DEBUG] AI Error: ${error.message}`],
-      strengths: ["None"],
-      weaknesses: ["The AI model failed to process this specific resume."],
-      suggestions: ["Please take a screenshot of this error and share it for debugging."]
-    };
+    console.error("AI matching failed, using smart fallback:", error);
+    return fallbackMatch(resumeText, jdText, "Quota/API Error");
   }
 }
 
