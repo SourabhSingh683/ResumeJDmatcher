@@ -1,4 +1,4 @@
-const { GoogleGenAI } = require("@google/genai");
+const https = require('https');
 
 // Fallback keyword-based matching
 function fallbackMatch(resumeText, jdText) {
@@ -59,11 +59,9 @@ function fallbackMatch(resumeText, jdText) {
   };
 }
 
-// AI-based matching using Gemini
+// AI-based matching using Gemini (REST API via native https to avoid SDK hang issues)
 async function aiMatch(resumeText, jdText, apiKey) {
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey });
-    
     const prompt = `
       You are an expert ATS (Applicant Tracking System) software. 
       Evaluate the following Resume against the provided Job Description.
@@ -74,29 +72,64 @@ async function aiMatch(resumeText, jdText, apiKey) {
       Resume:
       ${resumeText}
       
-      Return ONLY a JSON object (without markdown wrappers like \`\`\`json) with the following exact structure:
+      Return ONLY a JSON object (without markdown wrappers like \`\`\`json) with the following exact structure. 
+      CRITICAL: Limit matchingSkills and missingSkills to a maximum of 10 items each. Limit strengths, weaknesses, and suggestions to a maximum of 3 short bullet points each.
       {
         "matchScore": <number between 0 and 100>,
-        "matchingSkills": [<array of strings (skills found in both)>],
-        "missingSkills": [<array of strings (skills in JD but missing in Resume)>],
-        "strengths": [<array of strings (brief points)>],
-        "weaknesses": [<array of strings (brief points)>],
-        "suggestions": [<array of strings (actionable advice to reach 80+ score)>]
+        "matchingSkills": [<array of max 10 strings>],
+        "missingSkills": [<array of max 10 strings>],
+        "strengths": [<array of max 3 brief strings>],
+        "weaknesses": [<array of max 3 brief strings>],
+        "suggestions": [<array of max 3 brief strings>]
       }
     `;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
+    const postData = JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }]
+    });
+
+    const options = {
+      hostname: 'generativelanguage.googleapis.com',
+      port: 443,
+      path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData),
+        'Connection': 'close'
+      }
+    };
+
+    const responseText = await new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              const parsed = JSON.parse(data);
+              resolve(parsed.candidates[0].content.parts[0].text);
+            } catch (e) {
+              reject(e);
+            }
+          } else {
+            reject(new Error(`API Error: ${res.statusCode} - ${data}`));
+          }
+        });
+      });
+
+      req.on('error', (e) => reject(e));
+      req.write(postData);
+      req.end();
     });
     
-    let textResult = response.text;
+    let textResult = responseText;
     
     // Clean up if the model wrapped it in markdown
-    if (textResult.startsWith('\`\`\`json')) {
-      textResult = textResult.replace(/^\`\`\`json\n/, '').replace(/\n\`\`\`$/, '');
-    } else if (textResult.startsWith('\`\`\`')) {
-      textResult = textResult.replace(/^\`\`\`\n/, '').replace(/\n\`\`\`$/, '');
+    if (textResult.startsWith('```json')) {
+      textResult = textResult.replace(/^```json\n/, '').replace(/\n```$/, '');
+    } else if (textResult.startsWith('```')) {
+      textResult = textResult.replace(/^```\n/, '').replace(/\n```$/, '');
     }
     
     const parsed = JSON.parse(textResult);

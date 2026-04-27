@@ -14,6 +14,26 @@ exports.handler = async (event) => {
         event.httpMethod ||
         "POST";
 
+    let currentStep = "Initialization";
+    let isTimeout = false;
+
+    // Timeout Promise to catch if execution takes too long (25 seconds)
+    const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => {
+            isTimeout = true;
+            resolve({
+                statusCode: 500,
+                headers: {
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ error: `Backend timeout. Process stuck at: ${currentStep}` })
+            });
+        }, 25000);
+    });
+
+    const executionPromise = (async () => {
+
     // CORS
     if (method === 'OPTIONS') {
         return {
@@ -101,10 +121,17 @@ exports.handler = async (event) => {
         }
 
         // 🔥 Parse PDF
+        currentStep = "PDF Parsing (pdf-parse)";
         const pdfData = await pdfParse(fileBuffer);
-        const resumeText = pdfData.text;
+        let resumeText = pdfData.text;
+        
+        // Truncate to avoid massive payloads crashing Gemini
+        if (resumeText.length > 15000) {
+            resumeText = resumeText.substring(0, 15000) + "... [TRUNCATED]";
+        }
 
         // 🔥 Matching
+        currentStep = `AI Matching (Gemini) - Text Length: ${resumeText.length}`;
         let result;
         if (process.env.GEMINI_API_KEY) {
             result = await aiMatch(resumeText, jobDescription, process.env.GEMINI_API_KEY);
@@ -131,6 +158,9 @@ exports.handler = async (event) => {
             body: JSON.stringify({ error: err.message })
         };
     }
+    })();
+
+    return Promise.race([executionPromise, timeoutPromise]);
 };
 
 
