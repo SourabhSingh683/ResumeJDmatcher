@@ -134,10 +134,15 @@ async function aiMatch(resumeText, jdText, apiKey) {
     const parsed = JSON.parse(textResult);
     return parsed;
   } catch (error) {
-    console.error("AI matching failed, falling back to keyword matching:", error);
-    const fallbackResult = fallbackMatch(resumeText, jdText);
-    fallbackResult.suggestions.unshift(`[DEBUG] AI Failed: ${error.message || error}`);
-    return fallbackResult;
+    console.error("AI matching failed:", error);
+    return {
+      matchScore: 0,
+      matchingSkills: [],
+      missingSkills: [`[DEBUG] AI Error: ${error.message}`],
+      strengths: ["None"],
+      weaknesses: ["The AI model failed to process this specific resume."],
+      suggestions: ["Please take a screenshot of this error and share it for debugging."]
+    };
   }
 }
 
